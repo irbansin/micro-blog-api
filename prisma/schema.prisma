@@ -1,0 +1,145 @@
+// // This is your Prisma schema file,
+// // learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// // Get a free hosted Postgres database in seconds: `npx create-db`
+
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Core Tenant Entity
+
+model Company {
+  id          String       @id @default(uuid())
+  name        String
+  createdAt   DateTime     @default(now())
+  
+  // Relations
+  users            User[]
+  departments      Department[]
+  tweets           Tweet[]
+  userDepartments  UserDepartments[]
+  tweetVisibilities TweetVisibility[]
+}
+
+// Users & Departments (The ACL Foundation)
+enum Role {
+  ADMIN
+  USER
+}
+model User {
+  id          String   @id @default(uuid())
+  username    String
+  email       String   @unique
+  password    String
+  role        Role     @default(USER)
+  // Multi-tenancy: Every user belongs to exactly one company
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id])
+  
+  // A user can belong to multiple departments
+  departments UserDepartments[]
+  
+  // Tweets authored by this user
+  tweets      Tweet[]
+  
+  createdAt   DateTime @default(now())
+
+  //tenant-scoped username uniqueness
+  @@unique([companyId, username])
+  @@unique([id, companyId])
+  @@index([companyId])
+}
+
+model Department {
+  id          String   @id @default(uuid())
+  name        String
+      
+  // Multi-tenancy Constraint: Every department belongs to exactly one company
+  companyId   String 
+  company     Company  @relation(fields: [companyId], references: [id])
+
+  // Hierarchy: Parent -> Sub-departments
+  parentId    String?
+  parent      Department?  @relation("DepartmentHierarchy", fields: [parentId, companyId], references: [id, companyId])
+  children    Department[] @relation("DepartmentHierarchy")
+
+  // Junctions
+  users       UserDepartments[]
+  tweetVisibilities TweetVisibility[]
+
+  createdAt   DateTime @default(now())
+
+  //tenant scoped unique constraint and index for efficient lookups
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@index([parentId, companyId])
+  @@unique([id, companyId])
+}
+
+// Junction Table: User <-> Department (Many-to-Many)
+model UserDepartments {
+  userId       String
+  departmentId String
+  companyId    String
+
+  // Explicit FK to Company — enforces companyId refers to a real tenant
+  company      Company    @relation(fields: [companyId], references: [id])
+  user         User       @relation(fields: [userId, companyId], references: [id, companyId])
+  department   Department @relation(fields: [departmentId, companyId], references: [id, companyId])
+
+  @@id([userId, departmentId])
+  @@index([companyId])
+}
+
+// Tweets & Visibility Logic
+
+enum VisibilityType {
+  COMPANY
+  DEPARTMENTS
+  DEPARTMENTS_AND_SUBDEPARTMENTS
+}
+
+model Tweet {
+  id             String         @id @default(uuid())
+  content        String         @db.VarChar(280)
+  visibilityType VisibilityType
+  
+  // Multi-tenancy: Isolation at the tweet level
+  companyId      String
+  company        Company        @relation(fields: [companyId], references: [id])
+
+  // Author relationship
+  authorId       String
+  author         User           @relation(fields: [authorId, companyId], references: [id, companyId])
+
+  // Mapping to targeted departments
+  targetDepartments TweetVisibility[]
+
+  createdAt      DateTime       @default(now())
+
+  //tenant-scoped unique constraint and index for efficient lookups
+  @@unique([id, companyId])
+  @@index([companyId, createdAt])
+}
+
+// Junction Table: Tweet <-> Targeted Departments
+model TweetVisibility {
+  tweetId      String
+  departmentId String
+  companyId    String
+
+  company      Company    @relation(fields: [companyId], references: [id])
+  tweet        Tweet      @relation(fields: [tweetId, companyId], references: [id, companyId], onDelete: Cascade)
+  department   Department @relation(fields: [departmentId, companyId], references: [id, companyId], onDelete: Cascade)
+
+  @@id([tweetId, departmentId])
+  @@index([companyId])
+}
